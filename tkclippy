@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+
+#tkclippy [-f filename]
+
+import argparse
+import sys
+import tkinter as tk
+import threading
+import time
+from tkinter import ttk
+from tkinter import Button
+
+POLLSLEEPMS = 500
+
+def do_polling_tasks(root):
+   global storefile
+     #read file
+   try:
+      with open(storefile, 'r') as f:
+         fcont = f.read()
+   except:
+      fcont=""
+   #read primary changes
+   try:
+      prim = root.selection_get(selection="PRIMARY")
+   except tk.TclError:
+      prim = ""
+   #read clipboard
+   try:
+      clip = root.clipboard_get()
+   except tk.TclError:
+      clip = ""
+   return fcont, prim, clip
+
+class Scrolltext(tk.Frame):
+   def __init__(self, parent, **kwargs):
+      super().__init__(parent, **kwargs)
+      self.grid(column=0, row=0, sticky='nsew')
+      self.columnconfigure(0,weight=1)
+      self.rowconfigure(0,weight=1)
+
+      self.text = tk.Text(self, wrap="none", width=40, height=10)
+      self.text.grid(row=0, column=0, sticky="nsew")
+      hscroll = tk.Scrollbar(self, orient="horizontal", command=self.text.xview)
+      hscroll.grid(row=1, column=0, sticky="ew")
+      vscroll = tk.Scrollbar(self, orient="vertical", command=self.text.yview)
+      vscroll.grid(row=0, column=1, sticky="ns")
+   def clear(self):
+      self.text.delete("1.0","end")
+   def get(self):
+      return self.text.get("1.0","end-1c")
+   def insert(self, position, text):
+      self.text.insert(position, text)
+
+class Window(tk.Tk):
+   def __init__(self, fname):
+      super().__init__()
+      self.storefile = fname
+      self.clipbuflist = [""]
+      self.clipindex = 0
+      self.primbuflist = [""]
+      self.primindex = 0
+      self.selown = False  #do we own the selection
+      self.wm_title("tkclippy")
+#      self.geometry("800x400")
+      self.grid_columnconfigure(0,weight=1)
+      self.grid_rowconfigure(0,weight=1)
+      self.frame = tk.Frame(self)
+      self.frame.grid(column=0, row=0, sticky="nsew")
+      self.frame.columnconfigure(0,weight=1)
+      for row in [0, 4, 8]:
+         self.frame.rowconfigure(row,weight=1)
+      
+      self.filetext = Scrolltext(self.frame, width=40, height=10)
+      self.filetext.grid(row=0, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.primtext = Scrolltext(self.frame, width=40, height=10)
+      self.primtext.grid(row=4, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.button_selown = Button(self.frame, text='*', command=self.toggle_selection)
+      self.button_selown.grid(row=4, column=6)
+      self.button_primget = Button(self.frame, text='V', command=lambda: self.file_to_buffer("PRIMARY"))
+      self.button_primget.grid(row=5, column=6)
+      self.button_primput = Button(self.frame, text='^', command=lambda: self.buffer_to_file("PRIMARY"))
+      self.button_primput.grid(row=5, column=7)
+      self.button_primprv = Button(self.frame, text='<', command=lambda: self.prevbuff("PRIMARY"))
+      self.button_primput.grid(row=6, column=6)
+      self.button_primnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("PRIMARY"))
+      self.button_primput.grid(row=6, column=7)
+
+      self.cliptext = Scrolltext(self.frame, width=40, height=10)
+      self.cliptext.grid(row=8, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.button_clipget = Button(self.frame, text='V', command=lambda: self.file_to_buffer("CLIPBOARD"))
+      self.button_clipget.grid(row=9, column=6)
+      self.button_clipput = Button(self.frame, text='^', command=lambda: self.buffer_to_file("CLIPBOARD"))
+      self.button_clipput.grid(row=9, column=7)
+      self.button_clipprv = Button(self.frame, text='<', command=lambda: self.prevbuff("CLIPBOARD"))
+      self.button_clipput.grid(row=10, column=6)
+      self.button_clipnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("CLIPBOARD"))
+      self.button_clipput.grid(row=10, column=7)
+
+      self.pollit()  #kick off the polling loop
+
+   def set_clipboard(self, d):
+      self.clipboard_clear()
+      self.clipboard_append(d)
+
+   def provide_primary(self, offset, length):
+      text = self.primtext.get()
+      return text
+
+#TODO add error checking with popup window
+   def buffer_to_file(self, buff):
+      if buff == "PRIMARY":
+         text = self.primtext.get()
+      else: #clipboard
+         text = self.cliptext.get()
+      with open(self.storefile, 'w') as f:
+         f.write(text)
+
+   def toggle_selection(self):
+      if self.selown:
+         self.own_selection(False)
+      else:
+         self.own_selection(True)
+
+   def own_selection(self, w):
+      if w:
+         self.selection_handle(lambda o, l:self.provide_primary(o, l), selection="PRIMARY")
+         self.selection_own(selection="PRIMARY")
+         self.selown = True
+      else:
+         self.selection_clear(selection="PRIMARY")
+         self.selown = False
+
+   def file_to_buffer(self, buff):
+      cont = self.filetext.get()
+      if buff == "PRIMARY":
+         self.primbuflist.append(cont)
+         self.primindex = len(self.primbuflist) - 1 #display new
+         self.newprimdis()
+         self.own_selection(True)
+      else: #clipboard
+         self.set_clipboard(cont)
+#why were these commented out?
+         self.clipbuflist.append(cont)
+         self.clipindex = len(self.clipbuflist) - 1 #display new
+         self.newclipdis()
+
+   def prevbuff(self, buff):
+      if buf == "PRIMARY":
+         if self.primindex == 0:
+            return
+         self.primindex = self.primindex - 1
+         self.newprimdis()
+      else: #clipboard
+         if self.clipindex == 0:
+             return
+         self.clipindex = self.clipindex - 1
+         self.newclipdis()
+
+   def nextbuff(self, buff):
+      if buff == "PRIMARY":
+         if self.primindex == len(self.primbuflist) - 1 and slef.selown == False:
+            return
+         self.primindex = self.primindex + 1
+         self.newprimdis()
+      else: #clipboard
+         if self.clipindex == len(self.clipbuflist) - 1:
+            return
+         self.clipindex = self.clipindex + 1
+         self.newclipdis()
+
+   def newprimdis(self):
+      self.primtext.clear()
+      self.primtext.insert("1.0", self.primbuflist[self.primindex])
+
+   def newclipdis(self):
+      self.cliptext.clear()
+      self.cliptext.insert("1.0", self.clipbuflist[self.clipindex])
+
+   def pollit(self):
+      newf, newprim, newclip = do_polling_tasks(self)
+         #check if any changed.  if so, process.
+      text = self.filetext.get()
+      if newf != text and (len(text) != 1 or len(newf) != 0): #get from textbox
+         self.filetext.clear()
+         self.filetext.insert("1.0", newf)
+
+      if newclip != self.clipbuflist[-1]:
+         self.clipbuflist.append(newclip)
+         if self.clipindex + 2 == len(self.clipbuflist):
+            self.clipindex = self.clipindex + 1
+            self.newclipdis() #change textbox
+
+      if newprim != self.primbuflist[-1]:
+         self.primbuflist.append(newprim)
+         if self.primindex + 2 == len(self.primbuflist):
+            self.primindex = self.primindex + 1
+            self.newprimdis() #change textbox
+
+    #mark selectionown button
+      if self.selection_own_get() == None:
+         self.button_selown.config(relief='raised')
+         self.selown = False
+      else:
+         self.button_selown.config(relief='sunken')
+         self.selown = True
+
+      self.after(POLLSLEEPMS, self.pollit) #every so often
+
+
+def main():
+   global storefile, basewindow
+   p = argparse.ArgumentParser(description="interact clipboard with file")
+   p.add_argument("file", type=str, nargs='+', help="filename for interaction")
+   args = p.parse_args()
+   storefile = args.file[0]
+   basewindow = Window(storefile)
+   basewindow.mainloop()
+
+main()
