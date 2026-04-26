@@ -3,48 +3,56 @@
 #tkclippy [-f filename]
 
 import argparse
+import os
 import sys
 import tkinter as tk
-import threading
+import tkinter.font as tkfont
 import time
-from tkinter import ttk
 from tkinter import Button
+from tkinter import filedialog
+from tkinter import ttk
 
 POLLSLEEPMS = 500
 
-def do_polling_tasks(root):
-   global storefile
-     #read file
-   try:
-      with open(storefile, 'r') as f:
-         fcont = f.read()
-   except:
-      fcont=""
-   #read primary changes
-   try:
-      prim = root.selection_get(selection="PRIMARY")
-   except tk.TclError:
-      prim = ""
-   #read clipboard
-   try:
-      clip = root.clipboard_get()
-   except tk.TclError:
-      clip = ""
-   return fcont, prim, clip
+class BuffStore():
+   def __init__(self):
+      self.index = 0
+      self.list = [""]
+   def add(self, n): #add to end.  also moves current to newly added
+      self.list.append(n)
+      self.index = len(self.list) - 1
+   def delete(self): #delete current
+      del self.list[self.index]
+      if len(self.list) < 1:
+         self.list = [""]
+      if self.index >= len(self.list):
+         self.index = len(self.list) - 1
+   def get(self): #get current value
+      return self.list[self.index]
+   def getlast(self): #get last
+      return self.list[-1]
+   def prev(self):
+      if self.index > 0:
+         self.index = self.index - 1
+   def next(self):
+      if self.index < (len(self.list) - 1): #not already at end
+         self.index = self.index + 1
 
 class Scrolltext(tk.Frame):
    def __init__(self, parent, **kwargs):
-      super().__init__(parent, **kwargs)
+      super().__init__(parent)
       self.grid(column=0, row=0, sticky='nsew')
       self.columnconfigure(0,weight=1)
       self.rowconfigure(0,weight=1)
 
-      self.text = tk.Text(self, wrap="none", width=40, height=10)
+      self.text = tk.Text(self, wrap="none", **kwargs)
       self.text.grid(row=0, column=0, sticky="nsew")
       hscroll = tk.Scrollbar(self, orient="horizontal", command=self.text.xview)
       hscroll.grid(row=1, column=0, sticky="ew")
       vscroll = tk.Scrollbar(self, orient="vertical", command=self.text.yview)
       vscroll.grid(row=0, column=1, sticky="ns")
+      self.text.config(xscrollcommand=hscroll.set)
+      self.text.config(yscrollcommand=vscroll.set)
    def clear(self):
       self.text.delete("1.0","end")
    def get(self):
@@ -56,48 +64,61 @@ class Window(tk.Tk):
    def __init__(self, fname):
       super().__init__()
       self.storefile = fname
-      self.clipbuflist = [""]
-      self.clipindex = 0
-      self.primbuflist = [""]
-      self.primindex = 0
+      self.pbuflist = BuffStore()
+      self.cbuflist = BuffStore()
       self.selown = False  #do we own the selection
       self.wm_title("tkclippy")
+      font = tkfont.nametofont("TkDefaultFont")
+#font.configure(size=12)
 #      self.geometry("800x400")
       self.grid_columnconfigure(0,weight=1)
       self.grid_rowconfigure(0,weight=1)
       self.frame = tk.Frame(self)
       self.frame.grid(column=0, row=0, sticky="nsew")
       self.frame.columnconfigure(0,weight=1)
-      for row in [0, 4, 8]:
+      for row in [1, 5, 9]:
          self.frame.rowconfigure(row,weight=1)
       
-      self.filetext = Scrolltext(self.frame, width=40, height=10)
-      self.filetext.grid(row=0, column=0, rowspan=4, columnspan=6, sticky="nsew")
-      self.primtext = Scrolltext(self.frame, width=40, height=10)
-      self.primtext.grid(row=4, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.file = ttk.Label(self.frame, text=self.storefile)
+      self.file.grid(row=0, column=0, columnspan=7)
+      self.fcbutton = Button(self.frame, text="change", command=self.change_file)
+      self.fcbutton.grid(row=0, column=6, columnspan=2)
+      self.filetext = Scrolltext(self.frame, font=font, width=40, height=10)
+      self.filetext.grid(row=1, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.filetext.clear()
+      self.primtext = Scrolltext(self.frame, font=font, width=40, height=10)
+      self.primtext.grid(row=5, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.primtext.clear()
       self.button_selown = Button(self.frame, text='*', command=self.toggle_selection)
-      self.button_selown.grid(row=4, column=6)
+      self.button_selown.grid(row=5, column=6)
       self.button_primget = Button(self.frame, text='V', command=lambda: self.file_to_buffer("PRIMARY"))
-      self.button_primget.grid(row=5, column=6)
+      self.button_primget.grid(row=6, column=6)
       self.button_primput = Button(self.frame, text='^', command=lambda: self.buffer_to_file("PRIMARY"))
-      self.button_primput.grid(row=5, column=7)
-      self.button_primprv = Button(self.frame, text='<', command=lambda: self.prevbuff("PRIMARY"))
-      self.button_primput.grid(row=6, column=6)
-      self.button_primnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("PRIMARY"))
       self.button_primput.grid(row=6, column=7)
+      self.button_primprv = Button(self.frame, text='<', command=lambda: self.prevbuff("PRIMARY"))
+      self.button_primprv.grid(row=7, column=6)
+      self.button_primnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("PRIMARY"))
+      self.button_primnxt.grid(row=7, column=7)
 
-      self.cliptext = Scrolltext(self.frame, width=40, height=10)
-      self.cliptext.grid(row=8, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.cliptext = Scrolltext(self.frame, font=font, width=40, height=10)
+      self.cliptext.grid(row=9, column=0, rowspan=4, columnspan=6, sticky="nsew")
+      self.cliptext.clear()
       self.button_clipget = Button(self.frame, text='V', command=lambda: self.file_to_buffer("CLIPBOARD"))
-      self.button_clipget.grid(row=9, column=6)
+      self.button_clipget.grid(row=10, column=6)
       self.button_clipput = Button(self.frame, text='^', command=lambda: self.buffer_to_file("CLIPBOARD"))
-      self.button_clipput.grid(row=9, column=7)
-      self.button_clipprv = Button(self.frame, text='<', command=lambda: self.prevbuff("CLIPBOARD"))
-      self.button_clipput.grid(row=10, column=6)
-      self.button_clipnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("CLIPBOARD"))
       self.button_clipput.grid(row=10, column=7)
+      self.button_clipprv = Button(self.frame, text='<', command=lambda: self.prevbuff("CLIPBOARD"))
+      self.button_clipprv.grid(row=11, column=6)
+      self.button_clipnxt = Button(self.frame, text='>', command=lambda: self.nextbuff("CLIPBOARD"))
+      self.button_clipnxt.grid(row=11, column=7)
 
       self.pollit()  #kick off the polling loop
+
+   def change_file(self):
+      d, f = os.path.split(self.storefile)
+#TODO need a custom window here that can create a file and control font size
+      self.storefile = filedialog.askopenfilename(title="select a new file", 
+            initialdir=d, initialfile=f)
 
    def set_clipboard(self, d):
       self.clipboard_clear()
@@ -134,77 +155,89 @@ class Window(tk.Tk):
    def file_to_buffer(self, buff):
       cont = self.filetext.get()
       if buff == "PRIMARY":
-         self.primbuflist.append(cont)
-         self.primindex = len(self.primbuflist) - 1 #display new
-         self.newprimdis()
+         self.pbuflist.add(cont)
+         self.display_buffer("PRIMARY")
          self.own_selection(True)
       else: #clipboard
          self.set_clipboard(cont)
-#why were these commented out?
-         self.clipbuflist.append(cont)
-         self.clipindex = len(self.clipbuflist) - 1 #display new
-         self.newclipdis()
+         self.cbuflist.add(cont)
+         self.display_buffer("CLIPBOARD")
+
+   def add_to_clip(self, newclip):
+      self.cbuflist.add(newclip)
+      self.display_buffer("CLIPBOARD") #change textbox
+
+   def add_to_prim(self, newprim):
+      self.pbuflist.add(newprim)
+      self.display_buffer("PRIMARY")
 
    def prevbuff(self, buff):
       if buf == "PRIMARY":
-         if self.primindex == 0:
-            return
-         self.primindex = self.primindex - 1
-         self.newprimdis()
+         self.pbuflist.prev()
+         self.display_buffer("PRIMARY")
       else: #clipboard
-         if self.clipindex == 0:
-             return
-         self.clipindex = self.clipindex - 1
-         self.newclipdis()
+         self.cbuflist.prev()
+         self.display_buffer("CLIPBOARD") #change textbox
 
    def nextbuff(self, buff):
       if buff == "PRIMARY":
-         if self.primindex == len(self.primbuflist) - 1 and slef.selown == False:
-            return
-         self.primindex = self.primindex + 1
-         self.newprimdis()
+         if slef.selown == True:
+            self.pbuflist.next()
+         self.display_buffer("PRIMARY")
       else: #clipboard
-         if self.clipindex == len(self.clipbuflist) - 1:
-            return
-         self.clipindex = self.clipindex + 1
-         self.newclipdis()
+         self.cbuflist.next()
+         self.display_buffer("CLIPBOARD") #change textbox
 
-   def newprimdis(self):
-      self.primtext.clear()
-      self.primtext.insert("1.0", self.primbuflist[self.primindex])
+   def display_buffer(self, buf):
+      if buf == "PRIMARY":
+         self.primtext.clear()
+         self.primtext.insert("1.0", self.pbuflist.get())
+      else: #clipboard
+         self.cliptext.clear()
+         self.cliptext.insert("1.0", self.cbuflist.get())
 
-   def newclipdis(self):
-      self.cliptext.clear()
-      self.cliptext.insert("1.0", self.clipbuflist[self.clipindex])
+   def do_polling_tasks(self):
+     #read file
+      try:
+         with open(self.storefile, 'r') as f:
+            fcont = f.read()
+      except:
+         fcont=""
+      #read primary changes
+      try:
+         prim = self.selection_get(selection="PRIMARY")
+      except tk.TclError:
+         prim = ""
+      #read clipboard
+      try:
+         clip = self.clipboard_get()
+      except tk.TclError:
+         clip = ""
+      return fcont, prim, clip
 
    def pollit(self):
-      newf, newprim, newclip = do_polling_tasks(self)
+      newf, newprim, newclip = self.do_polling_tasks()
          #check if any changed.  if so, process.
       text = self.filetext.get()
       if newf != text and (len(text) != 1 or len(newf) != 0): #get from textbox
          self.filetext.clear()
          self.filetext.insert("1.0", newf)
-
-      if newclip != self.clipbuflist[-1]:
-         self.clipbuflist.append(newclip)
-         if self.clipindex + 2 == len(self.clipbuflist):
-            self.clipindex = self.clipindex + 1
-            self.newclipdis() #change textbox
-
-      if newprim != self.primbuflist[-1]:
-         self.primbuflist.append(newprim)
-         if self.primindex + 2 == len(self.primbuflist):
-            self.primindex = self.primindex + 1
-            self.newprimdis() #change textbox
-
+         self.add_to_clip(newf)
+         self.add_to_prim(newf)
+      if newprim != self.pbuflist.getlast():
+         self.add_to_prim(newprim)
+      if newclip != self.cbuflist.getlast():
+         self.add_to_clip(newclip)
     #mark selectionown button
-      if self.selection_own_get() == None:
-         self.button_selown.config(relief='raised')
-         self.selown = False
-      else:
-         self.button_selown.config(relief='sunken')
-         self.selown = True
-
+      try:
+         if self.selection_own_get() == None:
+            self.button_selown.config(relief='raised')
+            self.selown = False
+         else:
+            self.button_selown.config(relief='sunken')
+            self.selown = True
+      except KeyError:
+         pass  #happens in tk when using filedialog
       self.after(POLLSLEEPMS, self.pollit) #every so often
 
 
